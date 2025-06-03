@@ -1,3 +1,4 @@
 *.obj
 build/*
 prompt.md
+build.zip
