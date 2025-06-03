@@ -21,6 +21,15 @@ UINT_PTR g_timerId = 0;
 #define ID_PLAY_PAUSE 2002
 #define ID_PLAY_STOP 2003
 
+// 缩放模式菜单ID
+#define ID_SCALE_FIT 3001
+#define ID_SCALE_ORIGINAL 3002
+
+// 滤镜菜单ID
+#define ID_FILTER_NONE 4001
+#define ID_FILTER_GRAYSCALE 4002
+#define ID_FILTER_MOSAIC 4003
+
 // 窗口过程函数声明
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
@@ -59,6 +68,18 @@ HMENU CreateMenuBar()
     AppendMenu(hPlayMenu, MF_STRING, ID_PLAY_PAUSE, "&Pause");
     AppendMenu(hPlayMenu, MF_STRING, ID_PLAY_STOP, "&Stop");
     AppendMenu(hMenuBar, MF_POPUP, (UINT_PTR)hPlayMenu, "&Playback");
+      // 缩放模式菜单
+    HMENU hScaleMenu = CreatePopupMenu();
+    AppendMenu(hScaleMenu, MF_STRING | MF_CHECKED, ID_SCALE_FIT, "&Fit to Window");
+    AppendMenu(hScaleMenu, MF_STRING, ID_SCALE_ORIGINAL, "&Original Size");
+    AppendMenu(hMenuBar, MF_POPUP, (UINT_PTR)hScaleMenu, "&Scale");
+    
+    // 滤镜菜单
+    HMENU hFilterMenu = CreatePopupMenu();
+    AppendMenu(hFilterMenu, MF_STRING | MF_CHECKED, ID_FILTER_NONE, "&None");
+    AppendMenu(hFilterMenu, MF_STRING, ID_FILTER_GRAYSCALE, "&Grayscale");
+    AppendMenu(hFilterMenu, MF_STRING, ID_FILTER_MOSAIC, "&Mosaic");
+    AppendMenu(hMenuBar, MF_POPUP, (UINT_PTR)hFilterMenu, "F&ilters");
     
     return hMenuBar;
 }
@@ -218,17 +239,66 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             {
                 g_player->Pause();
             }
-            break;
-        case ID_PLAY_STOP:
+            break;        case ID_PLAY_STOP:
             if (g_player)
             {
                 g_player->Stop();
                 InvalidateRect(hwnd, nullptr, TRUE);
             }
             break;
+          // 缩放模式菜单处理
+        case ID_SCALE_FIT:
+            if (g_player)
+            {
+                g_player->SetScalingMode(ScalingMode::FIT_TO_WINDOW);
+                CheckMenuItem(GetMenu(hwnd), ID_SCALE_FIT, MF_CHECKED);
+                CheckMenuItem(GetMenu(hwnd), ID_SCALE_ORIGINAL, MF_UNCHECKED);
+                InvalidateRect(hwnd, nullptr, TRUE);
+            }
+            break;
+        case ID_SCALE_ORIGINAL:
+            if (g_player)
+            {
+                g_player->SetScalingMode(ScalingMode::ORIGINAL_SIZE);
+                CheckMenuItem(GetMenu(hwnd), ID_SCALE_FIT, MF_UNCHECKED);
+                CheckMenuItem(GetMenu(hwnd), ID_SCALE_ORIGINAL, MF_CHECKED);
+                InvalidateRect(hwnd, nullptr, TRUE);
+            }
+            break;
+          // 滤镜菜单处理
+        case ID_FILTER_NONE:
+            if (g_player)
+            {
+                g_player->SetFilter(FilterType::NONE);
+                CheckMenuItem(GetMenu(hwnd), ID_FILTER_NONE, MF_CHECKED);
+                CheckMenuItem(GetMenu(hwnd), ID_FILTER_GRAYSCALE, MF_UNCHECKED);
+                CheckMenuItem(GetMenu(hwnd), ID_FILTER_MOSAIC, MF_UNCHECKED);
+                InvalidateRect(hwnd, nullptr, TRUE);
+            }
+            break;
+        case ID_FILTER_GRAYSCALE:
+            if (g_player)
+            {
+                g_player->SetFilter(FilterType::GRAYSCALE);
+                CheckMenuItem(GetMenu(hwnd), ID_FILTER_NONE, MF_UNCHECKED);
+                CheckMenuItem(GetMenu(hwnd), ID_FILTER_GRAYSCALE, MF_CHECKED);
+                CheckMenuItem(GetMenu(hwnd), ID_FILTER_MOSAIC, MF_UNCHECKED);
+                InvalidateRect(hwnd, nullptr, TRUE);
+            }
+            break;
+        case ID_FILTER_MOSAIC:
+            if (g_player)
+            {
+                g_player->SetFilter(FilterType::MOSAIC);
+                CheckMenuItem(GetMenu(hwnd), ID_FILTER_NONE, MF_UNCHECKED);
+                CheckMenuItem(GetMenu(hwnd), ID_FILTER_GRAYSCALE, MF_UNCHECKED);
+                CheckMenuItem(GetMenu(hwnd), ID_FILTER_MOSAIC, MF_CHECKED);
+                InvalidateRect(hwnd, nullptr, TRUE);
+            }
+            break;
         }
         break;
-    }    case WM_SIZE:
+    }case WM_SIZE:
     {
         if (g_player)
         {
@@ -314,8 +384,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         
         EndPaint(hwnd, &ps);
         break;
-    }
-    case WM_KEYDOWN:
+    }    case WM_KEYDOWN:
     {
         if (g_player)
         {
@@ -345,6 +414,24 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     double duration = g_player->GetDuration();
                     g_player->Seek(min(duration, currentTime + 5.0));
                 }
+                break;
+              // 滤镜快捷键 (数字键1-3)
+            case '1':
+                PostMessage(hwnd, WM_COMMAND, ID_FILTER_NONE, 0);
+                break;
+            case '2':
+                PostMessage(hwnd, WM_COMMAND, ID_FILTER_GRAYSCALE, 0);
+                break;
+            case '3':
+                PostMessage(hwnd, WM_COMMAND, ID_FILTER_MOSAIC, 0);
+                break;
+            
+            // 缩放模式快捷键 (F1-F2)
+            case VK_F1:
+                PostMessage(hwnd, WM_COMMAND, ID_SCALE_FIT, 0);
+                break;
+            case VK_F2:
+                PostMessage(hwnd, WM_COMMAND, ID_SCALE_ORIGINAL, 0);
                 break;
             }
         }

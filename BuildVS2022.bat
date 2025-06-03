@@ -51,11 +51,10 @@ echo Compiling with Visual Studio 2022...
 cl /EHsc /MD /O2 /W3 /DWIN32 /D_WINDOWS /DNDEBUG ^
     /I"%FFMPEG_DIR%\include" ^
     "%SRC_DIR%\main.cpp" "%SRC_DIR%\VideoPlayer.cpp" "%SRC_DIR%\AudioPlayer.cpp" "%SRC_DIR%\ProgressBar.cpp" ^
-    /Fe:"%BUILD_DIR%\VideoPlayer.exe" ^
-    /link ^
+    /Fe:"%BUILD_DIR%\VideoPlayer.exe" ^    /link ^
     /LIBPATH:"%FFMPEG_DIR%\lib" ^
     avformat.lib avcodec.lib avutil.lib swscale.lib swresample.lib ^
-    user32.lib gdi32.lib comdlg32.lib kernel32.lib winmm.lib
+    user32.lib gdi32.lib comdlg32.lib kernel32.lib winmm.lib d3d9.lib
 
 if %ERRORLEVEL% NEQ 0 (
     echo.
