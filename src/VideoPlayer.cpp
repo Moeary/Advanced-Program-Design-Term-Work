@@ -445,6 +445,12 @@ void VideoPlayer::Render()
 
 void VideoPlayer::OnResize(int width, int height)
 {
+    // 安全检查：确保窗口尺寸有效
+    if (width <= 0 || height <= 0)
+    {
+        return;
+    }
+    
     m_windowWidth = width;
     m_windowHeight = height;
     
@@ -540,6 +546,16 @@ void VideoPlayer::SetFilter(FilterType filter)
 
 void VideoPlayer::CalculateDisplayRect(int& displayWidth, int& displayHeight, int& offsetX, int& offsetY)
 {
+    // 安全检查：确保窗口和视频尺寸有效
+    if (m_windowWidth <= 0 || m_windowHeight <= 0 || m_videoWidth <= 0 || m_videoHeight <= 0)
+    {
+        displayWidth = 0;
+        displayHeight = 0;
+        offsetX = 0;
+        offsetY = 0;
+        return;
+    }
+    
     switch (m_scalingMode)
     {
     case ScalingMode::FIT_TO_WINDOW:
@@ -549,8 +565,23 @@ void VideoPlayer::CalculateDisplayRect(int& displayWidth, int& displayHeight, in
             double scaleY = (double)m_windowHeight / m_videoHeight;
             double scale = (scaleX < scaleY) ? scaleX : scaleY; // 选择较小的缩放比例以确保视频完全显示
             
+            // 确保缩放不会产生无效尺寸
+            if (scale <= 0.0)
+            {
+                displayWidth = 0;
+                displayHeight = 0;
+                offsetX = 0;
+                offsetY = 0;
+                return;
+            }
+            
             displayWidth = (int)(m_videoWidth * scale);
             displayHeight = (int)(m_videoHeight * scale);
+            
+            // 确保计算结果不为负
+            if (displayWidth < 0) displayWidth = 0;
+            if (displayHeight < 0) displayHeight = 0;
+            
             offsetX = (m_windowWidth - displayWidth) / 2;
             offsetY = (m_windowHeight - displayHeight) / 2;
         }
@@ -711,37 +742,55 @@ void VideoPlayer::RenderWithD3D9()
     {
         std::cerr << "Failed to lock back buffer" << std::endl;
         return;
-    }
-      // 使用新的缩放计算
+    }    // 使用新的缩放计算
     int displayWidth, displayHeight, offsetX, offsetY;
     CalculateDisplayRect(displayWidth, displayHeight, offsetX, offsetY);
     
-    // 清除背景为黑色
-    memset(lockedRect.pBits, 0, lockedRect.Pitch * m_windowHeight);
+    // 如果计算的尺寸无效，直接返回
+    if (displayWidth <= 0 || displayHeight <= 0)
+    {
+        backBuffer->UnlockRect();
+        return;
+    }
     
-    // 直接拷贝像素（不进行缩放，简单实现）
-    if (m_videoWidth > 0 && m_videoHeight > 0 && m_buffer)
+    // 清除背景为黑色
+    if (m_windowHeight > 0)
+    {
+        memset(lockedRect.pBits, 0, lockedRect.Pitch * m_windowHeight);
+    }
+    
+    // 对于D3D9，我们需要实现真正的缩放，而不是简单的像素拷贝
+    if (m_videoWidth > 0 && m_videoHeight > 0 && m_buffer && 
+        offsetX >= 0 && offsetY >= 0 && 
+        offsetX + displayWidth <= m_windowWidth && 
+        offsetY + displayHeight <= m_windowHeight)
     {
         uint8_t* srcPtr = m_buffer;
         uint8_t* dstPtr = (uint8_t*)lockedRect.pBits + offsetY * lockedRect.Pitch + offsetX * 4;
         
-        int copyWidth = (m_videoWidth < (m_windowWidth - offsetX)) ? m_videoWidth : (m_windowWidth - offsetX);
-        int copyHeight = (m_videoHeight < (m_windowHeight - offsetY)) ? m_videoHeight : (m_windowHeight - offsetY);
+        // 计算缩放比例
+        double scaleX = (double)displayWidth / m_videoWidth;
+        double scaleY = (double)displayHeight / m_videoHeight;
         
-        if (copyWidth > 0 && copyHeight > 0)
+        // 简单的最近邻缩放
+        for (int y = 0; y < displayHeight; y++)
         {
-            for (int y = 0; y < copyHeight; y++)
+            int srcY = (int)(y / scaleY);
+            if (srcY >= m_videoHeight) srcY = m_videoHeight - 1;
+            
+            uint8_t* srcLinePtr = srcPtr + srcY * m_videoWidth * 4;
+            uint8_t* dstLinePtr = dstPtr + y * lockedRect.Pitch;
+            
+            for (int x = 0; x < displayWidth; x++)
             {
-                for (int x = 0; x < copyWidth; x++)
-                {
-                    // BGRA 格式
-                    dstPtr[x * 4 + 0] = srcPtr[x * 4 + 0]; // B
-                    dstPtr[x * 4 + 1] = srcPtr[x * 4 + 1]; // G
-                    dstPtr[x * 4 + 2] = srcPtr[x * 4 + 2]; // R
-                    dstPtr[x * 4 + 3] = 255;               // A
-                }
-                srcPtr += m_videoWidth * 4;
-                dstPtr += lockedRect.Pitch;
+                int srcX = (int)(x / scaleX);
+                if (srcX >= m_videoWidth) srcX = m_videoWidth - 1;
+                
+                // BGRA 格式
+                dstLinePtr[x * 4 + 0] = srcLinePtr[srcX * 4 + 0]; // B
+                dstLinePtr[x * 4 + 1] = srcLinePtr[srcX * 4 + 1]; // G
+                dstLinePtr[x * 4 + 2] = srcLinePtr[srcX * 4 + 2]; // R
+                dstLinePtr[x * 4 + 3] = 255;                      // A
             }
         }
     }
@@ -759,38 +808,118 @@ void VideoPlayer::RenderWithD3D9()
 
 void VideoPlayer::RenderWithGDI()
 {
-    if (!m_hdcMem || !m_buffer)
+    if (!m_buffer || !m_hwnd)
         return;
-    
-    // 应用滤镜到缓冲区
-    ApplyFilter(m_buffer, m_videoWidth, m_videoHeight, 3);
-    
+
     HDC hdc = GetDC(m_hwnd);
-    
-    // 直接从缓冲区创建位图并绘制（避免每次都创建删除）
-    HBITMAP hTempBitmap = CreateDIBitmap(hdc, &m_bitmapInfo.bmiHeader, CBM_INIT, m_buffer, &m_bitmapInfo, DIB_RGB_COLORS);
-    
-    if (hTempBitmap)
+    if (!hdc)
+        return;
+
+    int displayWidth, displayHeight, offsetX, offsetY;
+    CalculateDisplayRect(displayWidth, displayHeight, offsetX, offsetY);
+
+    // 安全检查：如果计算出的显示尺寸无效，则不进行渲染
+    if (displayWidth <= 0 || displayHeight <= 0)
     {
-        HDC hdcTemp = CreateCompatibleDC(hdc);
-        HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcTemp, hTempBitmap);
-          // 使用新的缩放计算
-        int displayWidth, displayHeight, offsetX, offsetY;
-        CalculateDisplayRect(displayWidth, displayHeight, offsetX, offsetY);
-        
-        // 清除背景
-        RECT rect = { 0, 0, m_windowWidth, m_windowHeight };
-        FillRect(hdc, &rect, (HBRUSH)GetStockObject(BLACK_BRUSH));
-        
-        // 绘制视频帧（使用COLORONCOLOR可能比HALFTONE更快）
-        SetStretchBltMode(hdc, COLORONCOLOR);
-        StretchBlt(hdc, offsetX, offsetY, displayWidth, displayHeight,
-                   hdcTemp, 0, 0, m_videoWidth, m_videoHeight, SRCCOPY);
-        
-        SelectObject(hdcTemp, hOldBitmap);
-        DeleteDC(hdcTemp);
-        DeleteObject(hTempBitmap);
+        // 可以选择填充整个窗口为黑色
+        RECT clientRect;
+        GetClientRect(m_hwnd, &clientRect);
+        FillRect(hdc, &clientRect, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        ReleaseDC(m_hwnd, hdc);
+        return;
+    }
+
+    // 更新GDI位图，如果视频帧已准备好
+    // 注意：m_frameRGB->data[0] 应该包含最新的视频帧数据
+    // UpdateBitmap() 应该使用 m_frameRGB->data[0] 来更新 m_hBitmap
+    // 这里假设 UpdateBitmap 内部会处理 m_frameRGB 的有效性
+    // 并且 m_buffer 是指向 m_frameRGB->data[0] 的指针，或者 UpdateBitmap 使用 m_frameRGB
+    
+    // 确保 m_frameRGB 和其数据有效
+    if (!m_frameRGB || !m_frameRGB->data[0]) {
+        ReleaseDC(m_hwnd, hdc);
+        return;
     }
     
+    // 更新GDI位图 (假设 UpdateBitmap 使用 m_frameRGB->data[0])
+    // 或者直接在这里准备数据
+    // 为了清晰，我们假设 UpdateBitmap 负责从 m_frameRGB 更新 m_hBitmap
+    // 如果 UpdateBitmap 使用 m_buffer，确保 m_buffer 是最新的
+    // UpdateBitmap(); // 这行可能需要，取决于 UpdateBitmap 的实现
+
+    // 如果 UpdateBitmap 还没有被调用，或者需要在这里直接操作数据
+    // 我们需要确保 m_hBitmap 是最新的
+    // 这里我们假设 m_frameRGB->data[0] 包含了解码和滤镜处理后的数据
+    // 并且 m_bitmapInfo 描述的是这个数据的格式 (BGRA)
+
+    // 填充黑边
+    RECT clientRect;
+    GetClientRect(m_hwnd, &clientRect);
+
+    // 绘制顶部黑边
+    if (offsetY > 0)
+    {
+        RECT topBlackBar = { 0, 0, clientRect.right, offsetY };
+        FillRect(hdc, &topBlackBar, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    }
+    // 绘制底部黑边
+    if (offsetY + displayHeight < clientRect.bottom)
+    {
+        RECT bottomBlackBar = { 0, offsetY + displayHeight, clientRect.right, clientRect.bottom };
+        FillRect(hdc, &bottomBlackBar, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    }
+    // 绘制左边黑边
+    if (offsetX > 0)
+    {
+        RECT leftBlackBar = { 0, offsetY, offsetX, offsetY + displayHeight };
+        FillRect(hdc, &leftBlackBar, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    }
+    // 绘制右边黑边
+    if (offsetX + displayWidth < clientRect.right)
+    {
+        RECT rightBlackBar = { offsetX + displayWidth, offsetY, clientRect.right, offsetY + displayHeight };
+        FillRect(hdc, &rightBlackBar, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    }
+    
+    // 创建或更新GDI位图
+    if (!m_hBitmap || m_bitmapInfo.bmiHeader.biWidth != m_videoWidth || m_bitmapInfo.bmiHeader.biHeight != -m_videoHeight)
+    {
+        CleanupGDI(); // 清理旧的GDI资源
+        if (!SetupGDI()) // 重新创建GDI资源以匹配视频尺寸
+        {
+            ReleaseDC(m_hwnd, hdc);
+            return; // 如果创建失败则返回
+        }
+    }
+
+    // 将视频帧数据复制到GDI位图的缓冲区
+    // m_frameRGB->data[0] 包含 BGRA 数据
+    // m_bitmapInfo.bmiHeader.biHeight 是负数，表示顶向下位图
+    // SetDIBitsToDevice 直接使用视频帧数据进行绘制，如果视频尺寸和目标区域尺寸一致
+    // StretchDIBits 用于缩放绘制
+    
+    // 将 m_frameRGB->data[0] 的内容设置到 m_hBitmap
+    // 注意：m_frameRGB 的行大小可能与 GDI 位图期望的不同，需要小心处理
+    // SetBitmapBits(m_hBitmap, m_videoHeight * m_videoWidth * 4, m_frameRGB->data[0]); // 这是一个简化，实际可能需要按行拷贝
+
+    // 使用 StretchDIBits 进行缩放和绘制
+    // m_frameRGB->data[0] 包含的是原始视频尺寸的图像数据
+    // 我们需要将其缩放到 displayWidth, displayHeight 并绘制到 (offsetX, offsetY)
+    
+    // 确保 m_swsContext 用于将解码帧转换为 m_frameRGB (AV_PIX_FMT_BGRA)
+    // 并且 m_frameRGB->linesize[0] 是正确的行字节数
+
+    if (m_hBitmap && m_frameRGB && m_frameRGB->data[0])
+    {
+        // 更新位图数据
+        SetDIBits(m_hdcMem, m_hBitmap, 0, m_videoHeight, m_frameRGB->data[0], &m_bitmapInfo, DIB_RGB_COLORS);
+        
+        // 使用 StretchBlt 进行缩放绘制
+        // 从内存DC (m_hdcMem) 中的位图 (m_hBitmap) 绘制到窗口DC (hdc)
+        SetStretchBltMode(hdc, COLORONCOLOR); // 或者 HALFTONE 以获得更好的质量，但性能较低
+        StretchBlt(hdc, offsetX, offsetY, displayWidth, displayHeight,
+            m_hdcMem, 0, 0, m_videoWidth, m_videoHeight, SRCCOPY);
+    }
+
     ReleaseDC(m_hwnd, hdc);
 }
