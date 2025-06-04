@@ -6,22 +6,27 @@
 // Slider range definitions
 const int AUDIO_OFFSET_RANGE = 400;  // -2.0s to +2.0s, precision 0.01s
 const int VOLUME_RANGE = 100;        // 0% to 100%
+const int MOSAIC_SIZE_RANGE = 30;    // 2 to 32 pixels
 
 ControlPanel::ControlPanel()
     : m_hwndParent(nullptr)
     , m_hwndPanel(nullptr)
     , m_hwndAudioOffsetSlider(nullptr)
     , m_hwndVolumeSlider(nullptr)
+    , m_hwndMosaicSizeSlider(nullptr)
     , m_hwndResetButton(nullptr)
     , m_hwndAudioOffsetLabel(nullptr)
     , m_hwndVolumeLabel(nullptr)
+    , m_hwndMosaicSizeLabel(nullptr)
     , m_hwndAudioOffsetValue(nullptr)
     , m_hwndVolumeValue(nullptr)
+    , m_hwndMosaicSizeValue(nullptr)
     , m_hFont(nullptr)
     , m_isVisible(false)
     , m_isInitialized(false)
     , m_audioOffset(0.0)
     , m_volume(1.0f)
+    , m_mosaicSize(8)
     , m_changeCallback(nullptr)
     , m_callbackUserData(nullptr)
 {
@@ -61,14 +66,13 @@ bool ControlPanel::Initialize(HWND parent, HINSTANCE hInstance)
     wc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
     wc.lpszClassName = "ControlPanelClass";
     RegisterClassEx(&wc);
-    
-    // Create control panel window
+      // Create control panel window
     m_hwndPanel = CreateWindowEx(
         WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         "ControlPanelClass",
         "Audio Video Control Panel",
         WS_CAPTION | WS_SYSMENU,
-        100, 100, 350, 200,
+        100, 100, 350, 280,
         parent, nullptr, hInstance, this
     );
     
@@ -132,10 +136,33 @@ void ControlPanel::CreateControls()
         WS_VISIBLE | WS_CHILD | TBS_HORZ | TBS_AUTOTICKS,
         20, yPos + 25, 310, 30,
         m_hwndPanel, (HMENU)ID_VOLUME_SLIDER, GetModuleHandle(nullptr), nullptr);
-    
-    SendMessage(m_hwndVolumeSlider, TBM_SETRANGE, TRUE, MAKELONG(0, VOLUME_RANGE));
+      SendMessage(m_hwndVolumeSlider, TBM_SETRANGE, TRUE, MAKELONG(0, VOLUME_RANGE));
     SendMessage(m_hwndVolumeSlider, TBM_SETPOS, TRUE, VOLUME_RANGE); // 100%
     SendMessage(m_hwndVolumeSlider, TBM_SETTICFREQ, VOLUME_RANGE / 10, 0);
+    
+    yPos += spacing;
+    
+    // Mosaic size control
+    m_hwndMosaicSizeLabel = CreateWindow("STATIC", "Mosaic Size:",
+        WS_VISIBLE | WS_CHILD,
+        20, yPos, 100, 20,
+        m_hwndPanel, nullptr, GetModuleHandle(nullptr), nullptr);
+    SendMessage(m_hwndMosaicSizeLabel, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+    
+    m_hwndMosaicSizeValue = CreateWindow("STATIC", "8px",
+        WS_VISIBLE | WS_CHILD | SS_RIGHT,
+        250, yPos, 80, 20,
+        m_hwndPanel, nullptr, GetModuleHandle(nullptr), nullptr);
+    SendMessage(m_hwndMosaicSizeValue, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+    
+    m_hwndMosaicSizeSlider = CreateWindow(TRACKBAR_CLASS, "",
+        WS_VISIBLE | WS_CHILD | TBS_HORZ | TBS_AUTOTICKS,
+        20, yPos + 25, 310, 30,
+        m_hwndPanel, (HMENU)ID_MOSAIC_SIZE_SLIDER, GetModuleHandle(nullptr), nullptr);
+    
+    SendMessage(m_hwndMosaicSizeSlider, TBM_SETRANGE, TRUE, MAKELONG(0, MOSAIC_SIZE_RANGE));
+    SendMessage(m_hwndMosaicSizeSlider, TBM_SETPOS, TRUE, MosaicSizeToSliderPos(8)); // Default 8px
+    SendMessage(m_hwndMosaicSizeSlider, TBM_SETTICFREQ, MOSAIC_SIZE_RANGE / 10, 0);
     
     yPos += spacing;
     
@@ -207,6 +234,22 @@ float ControlPanel::GetVolume() const
     return m_volume;
 }
 
+void ControlPanel::SetMosaicSize(int size)
+{
+    m_mosaicSize = (std::max)(2, (std::min)(32, size));
+    if (m_hwndMosaicSizeSlider)
+    {
+        int pos = MosaicSizeToSliderPos(m_mosaicSize);
+        SendMessage(m_hwndMosaicSizeSlider, TBM_SETPOS, TRUE, pos);
+        UpdateValueDisplays();
+    }
+}
+
+int ControlPanel::GetMosaicSize() const
+{
+    return m_mosaicSize;
+}
+
 void ControlPanel::SetCallback(void(*callback)(ControlType type, double value, void* userData), void* userData)
 {
     m_changeCallback = callback;
@@ -224,11 +267,16 @@ bool ControlPanel::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             OnSliderChange(ID_AUDIO_OFFSET_SLIDER);
             return true;
-        }
-        else if (hwndSlider == m_hwndVolumeSlider)
+        }        else if (hwndSlider == m_hwndVolumeSlider)
         {
             OnSliderChange(ID_VOLUME_SLIDER);
-            return true;        }
+            return true;
+        }
+        else if (hwndSlider == m_hwndMosaicSizeSlider)
+        {
+            OnSliderChange(ID_MOSAIC_SIZE_SLIDER);
+            return true;
+        }
         break;
     }
     case WM_COMMAND:
@@ -252,12 +300,18 @@ void ControlPanel::UpdateValueDisplays()
         oss << std::fixed << std::setprecision(2) << m_audioOffset << "s";
         SetWindowText(m_hwndAudioOffsetValue, oss.str().c_str());
     }
-    
-    if (m_hwndVolumeValue)
+      if (m_hwndVolumeValue)
     {
         std::ostringstream oss;
         oss << (int)(m_volume * 100) << "%";
         SetWindowText(m_hwndVolumeValue, oss.str().c_str());
+    }
+    
+    if (m_hwndMosaicSizeValue)
+    {
+        std::ostringstream oss;
+        oss << m_mosaicSize << "px";
+        SetWindowText(m_hwndMosaicSizeValue, oss.str().c_str());
     }
 }
 
@@ -274,14 +328,23 @@ void ControlPanel::OnSliderChange(int controlId)
             m_changeCallback(CONTROL_AUDIO_OFFSET, m_audioOffset, m_callbackUserData);
         }
         break;
-    }
-    case ID_VOLUME_SLIDER:
+    }    case ID_VOLUME_SLIDER:
     {
         int pos = (int)SendMessage(m_hwndVolumeSlider, TBM_GETPOS, 0, 0);
         m_volume = SliderPosToVolume(pos);
         if (m_changeCallback)
         {
             m_changeCallback(CONTROL_VOLUME, (double)(m_volume * 100.0f), m_callbackUserData);
+        }
+        break;
+    }
+    case ID_MOSAIC_SIZE_SLIDER:
+    {
+        int pos = (int)SendMessage(m_hwndMosaicSizeSlider, TBM_GETPOS, 0, 0);
+        m_mosaicSize = SliderPosToMosaicSize(pos);
+        if (m_changeCallback)
+        {
+            m_changeCallback(CONTROL_MOSAIC_SIZE, (double)m_mosaicSize, m_callbackUserData);
         }
         break;
     }
@@ -294,12 +357,14 @@ void ControlPanel::OnResetButton()
 {
     SetAudioOffset(0.0);
     SetVolume(1.0f);
+    SetMosaicSize(8); // Default 8px
     
     // Trigger callbacks
     if (m_changeCallback)
     {
         m_changeCallback(CONTROL_AUDIO_OFFSET, 0.0, m_callbackUserData);
         m_changeCallback(CONTROL_VOLUME, 100.0, m_callbackUserData);
+        m_changeCallback(CONTROL_MOSAIC_SIZE, 8.0, m_callbackUserData);
     }
 }
 
@@ -323,6 +388,18 @@ int ControlPanel::VolumeToSliderPos(float volume) const
 float ControlPanel::SliderPosToVolume(int pos) const
 {
     return (float)pos / VOLUME_RANGE;
+}
+
+int ControlPanel::MosaicSizeToSliderPos(int size) const
+{
+    // Map 2-32 pixels to 0-MOSAIC_SIZE_RANGE
+    return ((size - 2) * MOSAIC_SIZE_RANGE) / (32 - 2);
+}
+
+int ControlPanel::SliderPosToMosaicSize(int pos) const
+{
+    // Map 0-MOSAIC_SIZE_RANGE to 2-32 pixels
+    return 2 + (pos * (32 - 2)) / MOSAIC_SIZE_RANGE;
 }
 
 LRESULT CALLBACK ControlPanel::PanelWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)

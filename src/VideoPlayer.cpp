@@ -639,6 +639,12 @@ void VideoPlayer::SetFilter(FilterType filter)
     m_currentFilter = filter;
 }
 
+void VideoPlayer::SetMosaicSize(int size)
+{
+    // Clamp size to valid range (2-32 pixels)
+    m_mosaicSize = (std::max)(2, (std::min)(32, size));
+}
+
 void VideoPlayer::CalculateDisplayRect(int& displayWidth, int& displayHeight, int& offsetX, int& offsetY)
 {
     // 安全检查：确保窗口和视频尺寸有效

@@ -60,6 +60,9 @@ void OnControlPanelChanged(ControlType type, double value, void* userData)
             g_player->GetAudioPlayer()->SetVolume((float)value);
         }
         break;
+    case CONTROL_MOSAIC_SIZE:
+        g_player->SetMosaicSize((int)value);
+        break;
     }
 }
 

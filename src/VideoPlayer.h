@@ -66,10 +66,11 @@ public:
     // 缩放模式控制
     void SetScalingMode(ScalingMode mode);
     ScalingMode GetScalingMode() const { return m_scalingMode; }
-    
-    // 滤镜控制
+      // 滤镜控制
     void SetFilter(FilterType filter);
     FilterType GetCurrentFilter() const { return m_currentFilter; }
+    void SetMosaicSize(int size);
+    int GetMosaicSize() const { return m_mosaicSize; }
 
 private:    // FFmpeg 相关
     AVFormatContext* m_formatContext;
