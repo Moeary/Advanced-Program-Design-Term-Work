@@ -34,16 +34,23 @@ public:
     // WASAPI缓冲区操作
     BYTE* GetBuffer(UINT32 wantFrames);
     HRESULT ReleaseBuffer(UINT32 writtenFrames);
-    
-    // FLTP格式音频写入 - 左右声道分开处理
+      // FLTP格式音频写入 - 左右声道分开处理
     HRESULT WriteFLTP(float* left, float* right, UINT32 sampleCount);
+    
+    // 新增：带音视频同步的音频帧处理
+    HRESULT ProcessAudioFrame(AVFrame* frame);
     
     // 播放正弦波测试
     HRESULT PlaySinWave(int nb_samples);
-    
-    // 访问器方法供VideoPlayer使用
+      // 访问器方法供VideoPlayer使用
     int GetAudioStreamIndex() const { return m_audioStreamIndex; }
     AVCodecContext* GetAudioCodecContext() const { return m_audioCodecContext; }
+    
+    // 新增：音视频同步功能
+    void SetVideoTime(double videoTime);
+    double GetAudioClock() const;
+    void UpdateAudioSync();
+    int SynchronizeAudio(AVFrame* frame, int wantedNbSamples);
     
 private:
     // WASAPI相关
@@ -64,11 +71,30 @@ private:
     AVCodecContext* m_audioCodecContext;
     const AVCodec* m_audioCodec;
     SwrContext* m_swrContext;
-    int m_audioStreamIndex;
-      // 状态
+    int m_audioStreamIndex;    // 状态
     bool m_isInitialized;
     bool m_isPlaying;
     float m_volume;
+    
+    // 新增：音视频同步相关变量
+    double m_videoClock;        // 视频时钟（主时钟）
+    double m_audioClock;        // 音频时钟
+    double m_audioWriteTime;    // 音频写入时间
+    
+    // 音频同步算法相关
+    double m_audioDiffCum;          // 累计音视频差异（加权总和）
+    double m_audioDiffAvgCoef;      // 加权平均系数（公比q）
+    int m_audioDiffAvgCount;        // 差异计数
+    double m_audioDiffThreshold;    // 音频同步阈值
+    
+    // 音频缓冲区信息
+    UINT32 m_bufferFrameCount;      // 音频缓冲区帧数
+    UINT32 m_audioHwBufSize;        // 硬件缓冲区大小
+    
+    // 常量定义
+    static const double AV_NOSYNC_THRESHOLD;      // 10.0秒
+    static const int AUDIO_DIFF_AVG_NB;           // 20次
+    static const int SAMPLE_CORRECTION_PERCENT_MAX; // 10%
     
     // 私有方法
     HRESULT InitWASAPI();

@@ -470,11 +470,13 @@ void VideoPlayer::PlayLoop()
                 // 转换像素格式
                 sws_scale(m_swsContext, m_frame->data, m_frame->linesize, 0, m_videoHeight,
                          m_frameRGB->data, m_frameRGB->linesize);
-                
-                // 更新当前时间
+                  // 更新当前时间
                 if (m_packet->pts != AV_NOPTS_VALUE)
                 {
                     m_currentTime = m_packet->pts * av_q2d(m_formatContext->streams[m_videoStreamIndex]->time_base);
+                    
+                    // 设置视频时钟作为主时钟
+                    m_audioPlayer.SetVideoTime(m_currentTime);
                 }
                 
                 // 触发渲染
@@ -496,8 +498,7 @@ void VideoPlayer::PlayLoop()
                 
                 QueryPerformanceCounter(&lastTime);
             }
-        }
-        else if (m_audioPlayer.IsInitialized() && m_packet->stream_index == m_audioPlayer.GetAudioStreamIndex())
+        }        else if (m_audioPlayer.IsInitialized() && m_packet->stream_index == m_audioPlayer.GetAudioStreamIndex())
         {
             // 处理音频帧
             ret = avcodec_send_packet(m_audioPlayer.GetAudioCodecContext(), m_packet);
@@ -507,13 +508,8 @@ void VideoPlayer::PlayLoop()
                 ret = avcodec_receive_frame(m_audioPlayer.GetAudioCodecContext(), audioFrame);
                 if (ret == 0)
                 {
-                    // 如果是FLTP格式，直接写入WASAPI
-                    if (audioFrame->format == AV_SAMPLE_FMT_FLTP)
-                    {
-                        m_audioPlayer.WriteFLTP((float*)audioFrame->data[0], 
-                                               (float*)audioFrame->data[1], 
-                                               audioFrame->nb_samples);
-                    }
+                    // 使用新的音频处理方法（带音视频同步）
+                    m_audioPlayer.ProcessAudioFrame(audioFrame);
                 }
                 av_frame_free(&audioFrame);
             }

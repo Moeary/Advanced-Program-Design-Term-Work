@@ -2,6 +2,11 @@
 #include <iostream>
 #include <cmath>
 
+// 定义常量
+const double AudioPlayer::AV_NOSYNC_THRESHOLD = 10.0;
+const int AudioPlayer::AUDIO_DIFF_AVG_NB = 20;
+const int AudioPlayer::SAMPLE_CORRECTION_PERCENT_MAX = 10;
+
 AudioPlayer::AudioPlayer(WORD nChannels, DWORD nSamplesPerSec)
     : m_nChannels(nChannels)
     , m_nSamplesPerSec(nSamplesPerSec)
@@ -15,9 +20,23 @@ AudioPlayer::AudioPlayer(WORD nChannels, DWORD nSamplesPerSec)
     , m_isInitialized(false)
     , m_isPlaying(false)
     , m_volume(1.0f)
+    , m_videoClock(0.0)
+    , m_audioClock(0.0)
+    , m_audioWriteTime(0.0)
+    , m_audioDiffCum(0.0)
+    , m_audioDiffAvgCoef(0.0)
+    , m_audioDiffAvgCount(0)
+    , m_audioDiffThreshold(0.0)
+    , m_bufferFrameCount(0)
+    , m_audioHwBufSize(0)
 {
     // 初始化COM
     CoInitialize(nullptr);
+    
+    // 计算加权平均系数 (公比q)
+    // audio_diff_avg_coef = exp(log(0.01) / AUDIO_DIFF_AVG_NB)
+    m_audioDiffAvgCoef = exp(log(0.01) / AUDIO_DIFF_AVG_NB); // ≈ 0.79432
+    
     InitWASAPI();
 }
 
@@ -189,14 +208,28 @@ HRESULT AudioPlayer::InitWASAPI()
     if (FAILED(hr)) {
         std::cerr << "Failed to initialize audio client" << std::endl;
         return hr;
-    }
-
-    // 获取渲染客户端
+    }    // 获取渲染客户端
     hr = m_pAudioClient->GetService(__uuidof(IAudioRenderClient), (void**)&m_pRenderClient);
     if (FAILED(hr)) {
         std::cerr << "Failed to get render client" << std::endl;
         return hr;
     }
+
+    // 获取缓冲区大小信息（用于音视频同步）
+    hr = m_pAudioClient->GetBufferSize(&m_bufferFrameCount);
+    if (FAILED(hr)) {
+        std::cerr << "Failed to get buffer size" << std::endl;
+        return hr;
+    }
+    
+    // 计算硬件缓冲区大小（字节）
+    m_audioHwBufSize = m_bufferFrameCount * m_pwfx->nChannels * (m_pwfx->wBitsPerSample / 8);
+    
+    // 计算音频同步阈值（一次回调的时间间隔）
+    m_audioDiffThreshold = (double)m_audioHwBufSize / (m_pwfx->nSamplesPerSec * m_pwfx->nChannels * (m_pwfx->wBitsPerSample / 8));
+    
+    std::cout << "Audio buffer size: " << m_bufferFrameCount << " frames" << std::endl;
+    std::cout << "Audio diff threshold: " << m_audioDiffThreshold << " seconds" << std::endl;
 
     m_maxSampleCount = m_pwfx->nSamplesPerSec;
     m_flags = 0;
@@ -320,9 +353,11 @@ HRESULT AudioPlayer::WriteFLTP(float* left, float* right, UINT32 sampleCount)
     else
     {
         // 静音
-        memset(pData, 0, sampleCount * m_nChannels * sizeof(float));
-    }
+        memset(pData, 0, sampleCount * m_nChannels * sizeof(float));    }
 
+    // 更新音频写入时间（用于音频时钟计算）
+    m_audioWriteTime += (double)sampleCount / m_pwfx->nSamplesPerSec;
+    
     return ReleaseBuffer(sampleCount);
 }
 
@@ -343,6 +378,144 @@ HRESULT AudioPlayer::PlaySinWave(int nb_samples)
     }
 
     return ReleaseBuffer(nb_samples);
+}
+
+// 新增：音视频同步功能实现
+
+void AudioPlayer::SetVideoTime(double videoTime)
+{
+    m_videoClock = videoTime;
+}
+
+double AudioPlayer::GetAudioClock() const
+{
+    return m_audioClock;
+}
+
+void AudioPlayer::UpdateAudioSync()
+{
+    // 更新音频时钟
+    if (m_isPlaying && m_pAudioClient)
+    {
+        UINT32 numFramesPadding;
+        HRESULT hr = m_pAudioClient->GetCurrentPadding(&numFramesPadding);
+        if (SUCCEEDED(hr))
+        {
+            // 计算音频时钟 = 写入时间 - 缓冲区中剩余的播放时间
+            double bufferTime = (double)numFramesPadding / m_pwfx->nSamplesPerSec;
+            m_audioClock = m_audioWriteTime - bufferTime;
+        }
+    }
+}
+
+int AudioPlayer::SynchronizeAudio(AVFrame* frame, int wantedNbSamples)
+{
+    if (!frame || !m_isPlaying)
+        return wantedNbSamples;
+    
+    int nbSamples = frame->nb_samples;
+    
+    // 计算当前音视频时间差
+    double diff = m_audioClock - m_videoClock;
+    
+    // 如果差异太大（超过10秒），不进行同步
+    if (fabs(diff) >= AV_NOSYNC_THRESHOLD)
+    {
+        return nbSamples;
+    }
+    
+    // 计算加权平均数
+    // audio_diff_cum = diff + audio_diff_avg_coef * audio_diff_cum
+    m_audioDiffCum = diff + m_audioDiffAvgCoef * m_audioDiffCum;
+    
+    // 增加差异计数
+    if (m_audioDiffAvgCount < AUDIO_DIFF_AVG_NB)
+    {
+        m_audioDiffAvgCount++;
+    }
+    
+    // 计算加权平均差异
+    // avg_diff = audio_diff_cum * (1.0 - audio_diff_avg_coef)
+    double avgDiff = m_audioDiffCum * (1.0 - m_audioDiffAvgCoef);
+    
+    // 如果加权平均差异超过阈值，进行样本数调整
+    if (fabs(avgDiff) >= m_audioDiffThreshold)
+    {
+        // 计算需要的样本数
+        // wanted_nb_samples = nb_samples + (int)(diff * sample_rate)
+        wantedNbSamples = nbSamples + (int)(diff * m_audioCodecContext->sample_rate);
+        
+        // 限制调整幅度不超过10%
+        int minNbSamples = (nbSamples * (100 - SAMPLE_CORRECTION_PERCENT_MAX)) / 100;
+        int maxNbSamples = (nbSamples * (100 + SAMPLE_CORRECTION_PERCENT_MAX)) / 100;
+        
+        // 使用av_clip限制范围
+        wantedNbSamples = (wantedNbSamples < minNbSamples) ? minNbSamples : 
+                         (wantedNbSamples > maxNbSamples) ? maxNbSamples : wantedNbSamples;
+        
+        std::cout << "Audio sync: diff=" << diff << ", avg_diff=" << avgDiff 
+                  << ", samples=" << nbSamples << "->" << wantedNbSamples << std::endl;
+    }
+    else
+    {
+        wantedNbSamples = nbSamples;
+    }
+    
+    return wantedNbSamples;
+}
+
+HRESULT AudioPlayer::ProcessAudioFrame(AVFrame* frame)
+{
+    if (!frame || !m_swrContext || !m_isPlaying)
+        return E_FAIL;
+    
+    // 更新音频时钟
+    UpdateAudioSync();
+    
+    // 进行音视频同步，获取调整后的样本数
+    int wantedNbSamples = SynchronizeAudio(frame, frame->nb_samples);
+    
+    // 如果需要样本补偿，使用swr_set_compensation
+    if (wantedNbSamples != frame->nb_samples)
+    {
+        int compensation = (wantedNbSamples - frame->nb_samples) * m_pwfx->nSamplesPerSec / frame->sample_rate;
+        int out_count = wantedNbSamples * m_pwfx->nSamplesPerSec / frame->sample_rate;
+        
+        if (swr_set_compensation(m_swrContext, compensation, out_count) < 0)
+        {
+            std::cerr << "swr_set_compensation() failed" << std::endl;
+            return E_FAIL;
+        }
+    }
+    
+    // 分配输出缓冲区
+    uint8_t* output[2] = {nullptr};
+    int out_samples = av_rescale_rnd(swr_get_delay(m_swrContext, frame->sample_rate) + frame->nb_samples,
+                                    m_pwfx->nSamplesPerSec, frame->sample_rate, AV_ROUND_UP);
+    
+    if (av_samples_alloc(output, nullptr, 2, out_samples, AV_SAMPLE_FMT_FLTP, 0) < 0)
+    {
+        std::cerr << "Failed to allocate output samples" << std::endl;
+        return E_FAIL;
+    }
+    
+    // 重采样
+    int converted_samples = swr_convert(m_swrContext, output, out_samples,
+                                       (const uint8_t**)frame->data, frame->nb_samples);
+    
+    if (converted_samples <= 0)
+    {
+        av_freep(&output[0]);
+        return E_FAIL;
+    }
+    
+    // 写入音频数据
+    HRESULT hr = WriteFLTP((float*)output[0], (float*)output[1], converted_samples);
+    
+    // 释放缓冲区
+    av_freep(&output[0]);
+    
+    return hr;
 }
 
 void AudioPlayer::CleanupAudio()

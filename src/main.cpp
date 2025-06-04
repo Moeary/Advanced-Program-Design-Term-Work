@@ -158,14 +158,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // 显示窗口
     ShowWindow(g_hwnd, nCmdShow);
     UpdateWindow(g_hwnd);
-    
-    // 初始化进度条位置和大小
+      // 初始化进度条位置和大小 - 为时间显示预留空间
     RECT clientRect;
     GetClientRect(g_hwnd, &clientRect);
     int progressHeight = 20;
     int margin = 10;
+    int timeDisplayWidth = 150; // 为时间显示预留空间
     g_progressBar->Initialize(g_hwnd, margin, clientRect.bottom - progressHeight - margin, 
-                            clientRect.right - 2 * margin, progressHeight);
+                            clientRect.right - 2 * margin - timeDisplayWidth, progressHeight);
     g_progressBar->Show(true);
     
     // 设置定时器更新进度条
@@ -305,23 +305,28 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             int width = LOWORD(lParam);
             int height = HIWORD(lParam);
             g_player->OnResize(width, height);
-            
-            // 重新定位进度条
+              // 重新定位进度条 - 为时间显示留出空间
             if (g_progressBar)
             {
                 int progressHeight = 20;
                 int margin = 10;
+                int timeDisplayWidth = 150; // 为时间显示预留空间
                 g_progressBar->Initialize(hwnd, margin, height - progressHeight - margin, 
-                                        width - 2 * margin, progressHeight);
+                                        width - 2 * margin - timeDisplayWidth, progressHeight);
             }
         }
         break;
-    }
-    case WM_TIMER:
+    }    case WM_TIMER:
     {
         if (wParam == 1) // 进度条更新定时器
         {
             UpdateProgressBar();
+            
+            // 检查进度条自动隐藏
+            if (g_progressBar)
+            {
+                g_progressBar->UpdateAutoHide();
+            }
         }
         break;
     }
@@ -344,8 +349,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             g_progressBar->OnMouseUp(x, y);
         }
         break;
-    }
-    case WM_MOUSEMOVE:
+    }    case WM_MOUSEMOVE:
     {
         if (g_progressBar)
         {
