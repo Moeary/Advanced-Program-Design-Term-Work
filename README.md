@@ -50,7 +50,6 @@ Advanced Program Design Term Work/
 
 - **编程语言**: C++
 - **图形界面**: Win32 API (自定义控件: ProgressBar, ControlPanel)
-- **视频/音频解码**: FFmpeg (集成实验性硬件加速解码支持: DXVA2, D3D11VA, QSV, CUDA)
 - **音频播放**: WASAPI (Windows Audio Session API) - 现代低延迟音频系统，高级音视频同步
 - **图形API**: GDI, Direct3D 9 with MSAA Anti-aliasing
 - **编译器**: Visual Studio 2022 (MSVC)
