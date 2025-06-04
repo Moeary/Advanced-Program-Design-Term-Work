@@ -26,14 +26,17 @@ VideoPlayer::VideoPlayer()
     , m_videoHeight(0)
     , m_buffer(nullptr)
     , m_playThread(nullptr)
-    , m_renderEvent(nullptr)
-    , m_shouldStop(false)
+    , m_renderEvent(nullptr)    , m_shouldStop(false)
     , m_scalingMode(ScalingMode::FIT_TO_WINDOW)  // 默认适应窗口
     , m_currentFilter(FilterType::NONE)         // 默认无滤镜
     , m_mosaicSize(8)                          // 马赛克块大小
 {
     // 初始化 FFmpeg
     av_log_set_level(AV_LOG_QUIET);
+    
+    // 初始化 D3D9 表面描述
+    memset(&m_d3d9SurfaceDesc, 0, sizeof(m_d3d9SurfaceDesc));
+    memset(&m_d3dpp, 0, sizeof(m_d3dpp));
     
     // 创建渲染事件
     m_renderEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
@@ -88,15 +91,21 @@ bool VideoPlayer::Initialize(HWND hwnd, const std::string& videoPath)
             return false;
         }
     }
-    
-    // 初始化音频播放器
-    m_audioPlayer.Initialize(m_formatContext);
+      // 初始化音频播放器
+    if (m_audioPlayer.Initialize(m_formatContext))
+    {
+        m_audioPlayer.Start();
+        std::cout << "Audio player started successfully" << std::endl;
+    }
     
     return true;
 }
 
 bool VideoPlayer::OpenVideo(const std::string& videoPath)
 {
+    // 首先清理之前的资源
+    CleanupFFmpeg();
+    
     // 分配格式上下文
     m_formatContext = avformat_alloc_context();
     if (!m_formatContext)
@@ -213,14 +222,39 @@ bool VideoPlayer::OpenVideo(const std::string& videoPath)
     int numBytes = av_image_get_buffer_size(targetFormat, m_videoWidth, m_videoHeight, 1);
     m_buffer = (uint8_t*)av_malloc(numBytes * sizeof(uint8_t));
     
-    av_image_fill_arrays(m_frameRGB->data, m_frameRGB->linesize, m_buffer, targetFormat, m_videoWidth, m_videoHeight, 1);
-    
-    // 初始化图像转换上下文
+    av_image_fill_arrays(m_frameRGB->data, m_frameRGB->linesize, m_buffer, targetFormat, m_videoWidth, m_videoHeight, 1);    // 初始化图像转换上下文，使用高质量缩放参数
     m_swsContext = sws_getContext(
         m_videoWidth, m_videoHeight, m_codecContext->pix_fmt,
         m_videoWidth, m_videoHeight, targetFormat,
-        SWS_BILINEAR, nullptr, nullptr, nullptr
+        SWS_LANCZOS | SWS_FULL_CHR_H_INT | SWS_FULL_CHR_H_INP | SWS_ACCURATE_RND, 
+        nullptr, nullptr, nullptr  // 使用Lanczos缩放算法，启用全色度插值和精确舍入
     );
+    
+    // 如果使用 D3D9，创建离屏表面
+    if (m_useD3D9 && m_d3d9Device) {
+        // 释放现有表面
+        if (m_d3d9Surface) {
+            m_d3d9Surface.Reset();
+        }
+        memset(&m_d3d9SurfaceDesc, 0, sizeof(m_d3d9SurfaceDesc));
+
+        // 创建离屏普通表面用于视频帧
+        HRESULT hr = m_d3d9Device->CreateOffscreenPlainSurface(
+            m_videoWidth,
+            m_videoHeight,
+            D3DFMT_X8R8G8B8, // 对应 AV_PIX_FMT_BGRA 格式
+            D3DPOOL_DEFAULT,
+            &m_d3d9Surface,
+            nullptr
+        );
+
+        if (FAILED(hr)) {
+            std::cerr << "Failed to create D3D9 offscreen surface." << std::endl;
+            // 可以考虑回退到 GDI 或报告错误
+        } else {
+            m_d3d9Surface->GetDesc(&m_d3d9SurfaceDesc);
+        }
+    }
     
     return true;
 }
@@ -257,6 +291,23 @@ bool VideoPlayer::SetupD3D9()
     std::cout << "Window size: " << m_windowWidth << "x" << m_windowHeight << std::endl;
     std::cout << "Video size: " << m_videoWidth << "x" << m_videoHeight << std::endl;
     
+    // 检查多重采样抗锯齿支持
+    DWORD msaaQuality = 0;
+    D3DMULTISAMPLE_TYPE msaaType = D3DMULTISAMPLE_NONE;
+    
+    // 尝试检测最高可用的 MSAA 级别
+    D3DMULTISAMPLE_TYPE msaaLevels[] = { D3DMULTISAMPLE_8_SAMPLES, D3DMULTISAMPLE_4_SAMPLES, D3DMULTISAMPLE_2_SAMPLES };
+    for (int i = 0; i < 3; i++)
+    {
+        if (SUCCEEDED(m_d3d9->CheckDeviceMultiSampleType(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, 
+            D3DFMT_X8R8G8B8, TRUE, msaaLevels[i], &msaaQuality)))
+        {
+            msaaType = msaaLevels[i];
+            std::cout << "MSAA " << (1 << (i + 1)) << "x supported with " << msaaQuality << " quality levels" << std::endl;
+            break;
+        }
+    }
+    
     // 设置展示参数
     D3DPRESENT_PARAMETERS d3dParams = {};
     d3dParams.Windowed = TRUE;
@@ -267,6 +318,11 @@ bool VideoPlayer::SetupD3D9()
     d3dParams.BackBufferHeight = m_windowHeight;
     d3dParams.hDeviceWindow = m_hwnd;
     d3dParams.PresentationInterval = D3DPRESENT_INTERVAL_ONE; // 启用垂直同步
+    d3dParams.MultiSampleType = msaaType;
+    d3dParams.MultiSampleQuality = (msaaQuality > 0) ? msaaQuality - 1 : 0;
+    
+    // 保存参数以备后用
+    m_d3dpp = d3dParams;
     
     // 创建 D3D9 设备
     HRESULT hr = m_d3d9->CreateDevice(
@@ -280,11 +336,32 @@ bool VideoPlayer::SetupD3D9()
     
     if (FAILED(hr))
     {
-        std::cerr << "Failed to create D3D9 device, HRESULT: 0x" << std::hex << hr << std::endl;
-        return false;
+        std::cerr << "Failed to create D3D9 device with MSAA, trying without MSAA..." << std::endl;
+        // 如果 MSAA 失败，尝试不使用 MSAA
+        d3dParams.MultiSampleType = D3DMULTISAMPLE_NONE;
+        d3dParams.MultiSampleQuality = 0;
+        m_d3dpp = d3dParams;
+        
+        hr = m_d3d9->CreateDevice(
+            D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL,
+            m_hwnd,
+            D3DCREATE_HARDWARE_VERTEXPROCESSING,
+            &d3dParams,
+            m_d3d9Device.GetAddressOf()
+        );
+        
+        if (FAILED(hr))
+        {
+            std::cerr << "Failed to create D3D9 device, HRESULT: 0x" << std::hex << hr << std::endl;
+            return false;
+        }
     }
     
-    std::cout << "Direct3D 9 initialized successfully" << std::endl;
+    std::cout << "Direct3D 9 initialized successfully with " << 
+        (msaaType == D3DMULTISAMPLE_NONE ? "no MSAA" : 
+         (msaaType == D3DMULTISAMPLE_2_SAMPLES ? "2x MSAA" :
+          (msaaType == D3DMULTISAMPLE_4_SAMPLES ? "4x MSAA" : "8x MSAA"))) << std::endl;
     std::cout << "Using D3D9 rendering with format: " << (m_useD3D9 ? "BGRA" : "BGR24") << std::endl;
     return true;
 }
@@ -297,9 +374,8 @@ void VideoPlayer::Play()
     m_isPlaying = true;
     m_isPaused = false;
     m_shouldStop = false;
-    
-    // 启动音频播放
-    m_audioPlayer.Play();
+      // 启动音频播放
+    m_audioPlayer.Start();
     
     // 创建播放线程
     m_playThread = CreateThread(nullptr, 0, PlayThreadProc, this, 0, nullptr);
@@ -377,8 +453,7 @@ void VideoPlayer::PlayLoop()
         {
             // 文件结束或错误
             break;
-        }
-          if (m_packet->stream_index == m_videoStreamIndex)
+        }        if (m_packet->stream_index == m_videoStreamIndex)
         {
             // 发送数据包到解码器
             ret = avcodec_send_packet(m_codecContext, m_packet);
@@ -401,7 +476,8 @@ void VideoPlayer::PlayLoop()
                 {
                     m_currentTime = m_packet->pts * av_q2d(m_formatContext->streams[m_videoStreamIndex]->time_base);
                 }
-                  // 触发渲染
+                
+                // 触发渲染
                 InvalidateRect(m_hwnd, nullptr, FALSE);
                 
                 // 控制播放速度 - 使用实际帧率
@@ -419,6 +495,27 @@ void VideoPlayer::PlayLoop()
                 }
                 
                 QueryPerformanceCounter(&lastTime);
+            }
+        }
+        else if (m_audioPlayer.IsInitialized() && m_packet->stream_index == m_audioPlayer.GetAudioStreamIndex())
+        {
+            // 处理音频帧
+            ret = avcodec_send_packet(m_audioPlayer.GetAudioCodecContext(), m_packet);
+            if (ret == 0)
+            {
+                AVFrame* audioFrame = av_frame_alloc();
+                ret = avcodec_receive_frame(m_audioPlayer.GetAudioCodecContext(), audioFrame);
+                if (ret == 0)
+                {
+                    // 如果是FLTP格式，直接写入WASAPI
+                    if (audioFrame->format == AV_SAMPLE_FMT_FLTP)
+                    {
+                        m_audioPlayer.WriteFLTP((float*)audioFrame->data[0], 
+                                               (float*)audioFrame->data[1], 
+                                               audioFrame->nb_samples);
+                    }
+                }
+                av_frame_free(&audioFrame);
             }
         }
         
@@ -519,6 +616,7 @@ void VideoPlayer::CleanupGDI()
 
 void VideoPlayer::CleanupD3D9()
 {
+    m_d3d9Surface.Reset();
     m_swapChain.Reset();
     m_d3d9Device.Reset();
     m_d3d9.Reset();
@@ -586,14 +684,26 @@ void VideoPlayer::CalculateDisplayRect(int& displayWidth, int& displayHeight, in
             offsetY = (m_windowHeight - displayHeight) / 2;
         }
         break;
-        
-    case ScalingMode::ORIGINAL_SIZE:
+          case ScalingMode::ORIGINAL_SIZE:
         {
             // 原始尺寸，居中显示
             displayWidth = m_videoWidth;
             displayHeight = m_videoHeight;
+            
+            // 确保视频不会超出窗口边界
+            if (displayWidth > m_windowWidth) {
+                displayWidth = m_windowWidth;
+            }
+            if (displayHeight > m_windowHeight) {
+                displayHeight = m_windowHeight;
+            }
+            
             offsetX = (m_windowWidth - displayWidth) / 2;
             offsetY = (m_windowHeight - displayHeight) / 2;
+            
+            // 确保偏移不为负
+            if (offsetX < 0) offsetX = 0;
+            if (offsetY < 0) offsetY = 0;
         }
         break;
     }
@@ -735,68 +845,125 @@ void VideoPlayer::RenderWithD3D9()
         return;
     }
     
-    // 锁定后备缓冲区
-    D3DLOCKED_RECT lockedRect;
-    hr = backBuffer->LockRect(&lockedRect, nullptr, D3DLOCK_DISCARD);
-    if (FAILED(hr))
-    {
-        std::cerr << "Failed to lock back buffer" << std::endl;
-        return;
-    }    // 使用新的缩放计算
+    // 使用新的缩放计算
     int displayWidth, displayHeight, offsetX, offsetY;
     CalculateDisplayRect(displayWidth, displayHeight, offsetX, offsetY);
     
     // 如果计算的尺寸无效，直接返回
     if (displayWidth <= 0 || displayHeight <= 0)
     {
-        backBuffer->UnlockRect();
         return;
     }
     
-    // 清除背景为黑色
-    if (m_windowHeight > 0)
-    {
-        memset(lockedRect.pBits, 0, lockedRect.Pitch * m_windowHeight);
-    }
+    // 清除后备缓冲区为黑色
+    m_d3d9Device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(0, 0, 0), 1.0f, 0);
     
-    // 对于D3D9，我们需要实现真正的缩放，而不是简单的像素拷贝
-    if (m_videoWidth > 0 && m_videoHeight > 0 && m_buffer && 
-        offsetX >= 0 && offsetY >= 0 && 
-        offsetX + displayWidth <= m_windowWidth && 
-        offsetY + displayHeight <= m_windowHeight)
+    // 如果有离屏表面可用，使用它进行高质量缩放
+    if (m_d3d9Surface)
     {
-        uint8_t* srcPtr = m_buffer;
-        uint8_t* dstPtr = (uint8_t*)lockedRect.pBits + offsetY * lockedRect.Pitch + offsetX * 4;
-        
-        // 计算缩放比例
-        double scaleX = (double)displayWidth / m_videoWidth;
-        double scaleY = (double)displayHeight / m_videoHeight;
-        
-        // 简单的最近邻缩放
-        for (int y = 0; y < displayHeight; y++)
+        // 锁定离屏表面并更新视频数据
+        D3DLOCKED_RECT lockedRect;
+        hr = m_d3d9Surface->LockRect(&lockedRect, nullptr, 0);
+        if (SUCCEEDED(hr))
         {
-            int srcY = (int)(y / scaleY);
-            if (srcY >= m_videoHeight) srcY = m_videoHeight - 1;
+            // 将视频数据复制到离屏表面
+            uint8_t* srcPtr = m_buffer;
+            uint8_t* dstPtr = (uint8_t*)lockedRect.pBits;
             
-            uint8_t* srcLinePtr = srcPtr + srcY * m_videoWidth * 4;
-            uint8_t* dstLinePtr = dstPtr + y * lockedRect.Pitch;
-            
-            for (int x = 0; x < displayWidth; x++)
+            for (int y = 0; y < m_videoHeight; y++)
             {
-                int srcX = (int)(x / scaleX);
-                if (srcX >= m_videoWidth) srcX = m_videoWidth - 1;
-                
-                // BGRA 格式
-                dstLinePtr[x * 4 + 0] = srcLinePtr[srcX * 4 + 0]; // B
-                dstLinePtr[x * 4 + 1] = srcLinePtr[srcX * 4 + 1]; // G
-                dstLinePtr[x * 4 + 2] = srcLinePtr[srcX * 4 + 2]; // R
-                dstLinePtr[x * 4 + 3] = 255;                      // A
+                memcpy(dstPtr + y * lockedRect.Pitch, srcPtr + y * m_videoWidth * 4, m_videoWidth * 4);
+            }
+            
+            m_d3d9Surface->UnlockRect();
+            
+            // 使用 StretchRect 进行高质量缩放
+            RECT srcRect = { 0, 0, m_videoWidth, m_videoHeight };
+            RECT dstRect = { offsetX, offsetY, offsetX + displayWidth, offsetY + displayHeight };
+            
+            hr = m_d3d9Device->StretchRect(m_d3d9Surface.Get(), &srcRect, backBuffer.Get(), &dstRect, D3DTEXF_LINEAR);
+            if (FAILED(hr))
+            {
+                std::cerr << "Failed to stretch rect, HRESULT: 0x" << std::hex << hr << std::endl;
             }
         }
+        else
+        {
+            std::cerr << "Failed to lock offscreen surface" << std::endl;
+        }
     }
-    
-    // 解锁后备缓冲区
-    backBuffer->UnlockRect();
+    else
+    {
+        // 回退到直接像素拷贝的方法（原有实现）
+        D3DLOCKED_RECT lockedRect;
+        hr = backBuffer->LockRect(&lockedRect, nullptr, D3DLOCK_DISCARD);
+        if (FAILED(hr))
+        {
+            std::cerr << "Failed to lock back buffer" << std::endl;
+            return;
+        }
+        
+        // 清除背景为黑色
+        if (m_windowHeight > 0)
+        {
+            memset(lockedRect.pBits, 0, lockedRect.Pitch * m_windowHeight);
+        }
+        
+        // 使用双线性插值进行软件缩放（比最近邻插值质量更好）
+        if (m_videoWidth > 0 && m_videoHeight > 0 && m_buffer && 
+            offsetX >= 0 && offsetY >= 0 && 
+            offsetX + displayWidth <= m_windowWidth && 
+            offsetY + displayHeight <= m_windowHeight)
+        {
+            uint8_t* srcPtr = m_buffer;
+            uint8_t* dstPtr = (uint8_t*)lockedRect.pBits + offsetY * lockedRect.Pitch + offsetX * 4;
+            
+            // 计算缩放比例
+            double scaleX = (double)m_videoWidth / displayWidth;
+            double scaleY = (double)m_videoHeight / displayHeight;
+            
+            // 双线性插值缩放
+            for (int y = 0; y < displayHeight; y++)
+            {
+                double srcY = y * scaleY;
+                int srcY1 = (int)srcY;
+                int srcY2 = (srcY1 + 1 < m_videoHeight) ? srcY1 + 1 : m_videoHeight - 1;
+                double deltaY = srcY - srcY1;
+                
+                uint8_t* dstLinePtr = dstPtr + y * lockedRect.Pitch;
+                
+                for (int x = 0; x < displayWidth; x++)
+                {
+                    double srcX = x * scaleX;
+                    int srcX1 = (int)srcX;
+                    int srcX2 = (srcX1 + 1 < m_videoWidth) ? srcX1 + 1 : m_videoWidth - 1;
+                    double deltaX = srcX - srcX1;
+                    
+                    // 获取四个相邻像素
+                    uint8_t* p11 = srcPtr + (srcY1 * m_videoWidth + srcX1) * 4;
+                    uint8_t* p21 = srcPtr + (srcY1 * m_videoWidth + srcX2) * 4;
+                    uint8_t* p12 = srcPtr + (srcY2 * m_videoWidth + srcX1) * 4;
+                    uint8_t* p22 = srcPtr + (srcY2 * m_videoWidth + srcX2) * 4;
+                    
+                    // 双线性插值计算每个颜色分量
+                    for (int c = 0; c < 3; c++) // B, G, R
+                    {
+                        double top = p11[c] * (1.0 - deltaX) + p21[c] * deltaX;
+                        double bottom = p12[c] * (1.0 - deltaX) + p22[c] * deltaX;
+                        double result = top * (1.0 - deltaY) + bottom * deltaY;
+                        // 手动实现 clamp 功能
+                        int clampedResult = (int)result;
+                        if (clampedResult < 0) clampedResult = 0;
+                        if (clampedResult > 255) clampedResult = 255;
+                        dstLinePtr[x * 4 + c] = (uint8_t)clampedResult;
+                    }
+                    dstLinePtr[x * 4 + 3] = 255; // Alpha
+                }
+            }
+        }
+        
+        backBuffer->UnlockRect();
+    }
     
     // 呈现到屏幕
     hr = m_d3d9Device->Present(nullptr, nullptr, nullptr, nullptr);
@@ -913,10 +1080,10 @@ void VideoPlayer::RenderWithGDI()
     {
         // 更新位图数据
         SetDIBits(m_hdcMem, m_hBitmap, 0, m_videoHeight, m_frameRGB->data[0], &m_bitmapInfo, DIB_RGB_COLORS);
-        
-        // 使用 StretchBlt 进行缩放绘制
+          // 使用 StretchBlt 进行缩放绘制
         // 从内存DC (m_hdcMem) 中的位图 (m_hBitmap) 绘制到窗口DC (hdc)
-        SetStretchBltMode(hdc, COLORONCOLOR); // 或者 HALFTONE 以获得更好的质量，但性能较低
+        SetStretchBltMode(hdc, HALFTONE); // 使用 HALFTONE 模式以获得更好的抗锯齿效果
+        SetBrushOrgEx(hdc, 0, 0, nullptr); // HALFTONE 模式需要设置画刷原点
         StretchBlt(hdc, offsetX, offsetY, displayWidth, displayHeight,
             m_hdcMem, 0, 0, m_videoWidth, m_videoHeight, SRCCOPY);
     }

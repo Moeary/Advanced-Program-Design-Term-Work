@@ -89,11 +89,13 @@ private:    // FFmpeg 相关
     HDC m_hdcMem;
     HBITMAP m_hBitmap;
     BITMAPINFO m_bitmapInfo;
-    
-    // Direct3D 9 相关
+      // Direct3D 9 相关
     ComPtr<IDirect3D9> m_d3d9;
     ComPtr<IDirect3DDevice9> m_d3d9Device;
     ComPtr<IDirect3DSwapChain9> m_swapChain;
+    ComPtr<IDirect3DSurface9> m_d3d9Surface; // 离屏表面用于视频帧
+    D3DSURFACE_DESC m_d3d9SurfaceDesc;       // 离屏表面描述
+    D3DPRESENT_PARAMETERS m_d3dpp;
     bool m_useD3D9;
     
     // 显示相关
