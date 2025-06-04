@@ -50,11 +50,11 @@ echo.
 echo Compiling with Visual Studio 2022...
 cl /EHsc /MD /O2 /W3 /DWIN32 /D_WINDOWS /DNDEBUG ^
     /I"%FFMPEG_DIR%\include" ^
-    "%SRC_DIR%\main.cpp" "%SRC_DIR%\VideoPlayer.cpp" "%SRC_DIR%\AudioPlayer.cpp" "%SRC_DIR%\ProgressBar.cpp" ^
+    "%SRC_DIR%\main.cpp" "%SRC_DIR%\VideoPlayer.cpp" "%SRC_DIR%\AudioPlayer.cpp" "%SRC_DIR%\ProgressBar.cpp" "%SRC_DIR%\ControlPanel.cpp" ^
     /Fe:"%BUILD_DIR%\VideoPlayer.exe" ^    /link ^
     /LIBPATH:"%FFMPEG_DIR%\lib" ^
     avformat.lib avcodec.lib avutil.lib swscale.lib swresample.lib ^
-    user32.lib gdi32.lib comdlg32.lib kernel32.lib winmm.lib d3d9.lib
+    user32.lib gdi32.lib comdlg32.lib kernel32.lib winmm.lib d3d9.lib comctl32.lib
 
 if %ERRORLEVEL% NEQ 0 (
     echo.
@@ -90,5 +90,9 @@ echo    - Space: Play/Pause
 echo    - ESC: Stop
 echo    - Left Arrow: Seek back 5 seconds
 echo    - Right Arrow: Seek forward 5 seconds
+echo    - F6: Toggle Control Panel (Audio Offset and Volume)
+echo    - F1: Fit to Window scale mode
+echo    - F2: Original Size scale mode
+echo    - 1/2/3: Filter modes (None/Grayscale/Mosaic)
 echo.
 pause

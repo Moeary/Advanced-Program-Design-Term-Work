@@ -1,6 +1,7 @@
 #include "AudioPlayer.h"
 #include <iostream>
 #include <cmath>
+#include <algorithm>
 
 // 定义常量
 const double AudioPlayer::AV_NOSYNC_THRESHOLD = 10.0;
@@ -16,10 +17,10 @@ AudioPlayer::AudioPlayer(WORD nChannels, DWORD nSamplesPerSec)
     , m_audioCodecContext(nullptr)
     , m_audioCodec(nullptr)
     , m_swrContext(nullptr)
-    , m_audioStreamIndex(-1)
-    , m_isInitialized(false)
+    , m_audioStreamIndex(-1)    , m_isInitialized(false)
     , m_isPlaying(false)
     , m_volume(1.0f)
+    , m_audioOffset(0.0)
     , m_videoClock(0.0)
     , m_audioClock(0.0)
     , m_audioWriteTime(0.0)
@@ -242,6 +243,13 @@ HRESULT AudioPlayer::Start()
 {
     if (m_pAudioClient)
     {
+        // 重置音视频同步状态
+        m_videoClock = 0.0;
+        m_audioClock = 0.0;
+        m_audioWriteTime = 0.0;
+        m_audioDiffCum = 0.0;
+        m_audioDiffAvgCount = 0;
+        
         m_isPlaying = true;
         return m_pAudioClient->Start();
     }
@@ -253,6 +261,14 @@ HRESULT AudioPlayer::Stop()
     if (m_pAudioClient)
     {
         m_isPlaying = false;
+        
+        // 重置音视频同步状态
+        m_videoClock = 0.0;
+        m_audioClock = 0.0;
+        m_audioWriteTime = 0.0;
+        m_audioDiffCum = 0.0;
+        m_audioDiffAvgCount = 0;
+        
         return m_pAudioClient->Stop();
     }
     return E_FAIL;
@@ -384,7 +400,8 @@ HRESULT AudioPlayer::PlaySinWave(int nb_samples)
 
 void AudioPlayer::SetVideoTime(double videoTime)
 {
-    m_videoClock = videoTime;
+    // Apply audio offset for synchronization
+    m_videoClock = videoTime + m_audioOffset;
 }
 
 double AudioPlayer::GetAudioClock() const
@@ -553,4 +570,16 @@ void AudioPlayer::CleanupAudio()
 
     m_isInitialized = false;
     m_isPlaying = false;
+}
+
+// Audio offset control methods
+void AudioPlayer::SetAudioOffset(double offset)
+{
+    // Clamp offset to reasonable range: -2.0s to +2.0s
+    m_audioOffset = (std::max)(-2.0, (std::min)(2.0, offset));
+}
+
+double AudioPlayer::GetAudioOffset() const
+{
+    return m_audioOffset;
 }

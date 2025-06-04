@@ -30,6 +30,7 @@ VideoPlayer::VideoPlayer()
     , m_scalingMode(ScalingMode::FIT_TO_WINDOW)  // 默认适应窗口
     , m_currentFilter(FilterType::NONE)         // 默认无滤镜
     , m_mosaicSize(8)                          // 马赛克块大小
+    , m_audioOffset(0.0)                       // 音频偏移初始化
 {
     // 初始化 FFmpeg
     av_log_set_level(AV_LOG_QUIET);
@@ -1085,4 +1086,20 @@ void VideoPlayer::RenderWithGDI()
     }
 
     ReleaseDC(m_hwnd, hdc);
+}
+
+void VideoPlayer::SetAudioOffset(double offset)
+{
+    m_audioOffset = offset;
+    m_audioPlayer.SetAudioOffset(offset);
+}
+
+double VideoPlayer::GetAudioOffset() const
+{
+    return m_audioOffset;
+}
+
+AudioPlayer* VideoPlayer::GetAudioPlayer()
+{
+    return &m_audioPlayer;
 }

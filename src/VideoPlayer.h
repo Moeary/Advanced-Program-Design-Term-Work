@@ -48,10 +48,14 @@ public:
     double GetDuration() const { return m_duration; }
     double GetCurrentTime() const { return m_currentTime; }
     double GetFrameRate() const { return m_frameRate; }
-    
-    // 音频控制
+      // 音频控制
     void SetVolume(float volume);
     bool HasAudio() const;
+    
+    // 音频偏移控制
+    void SetAudioOffset(double offset);
+    double GetAudioOffset() const;
+    AudioPlayer* GetAudioPlayer();
     
     // 渲染当前帧
     void Render();
@@ -108,9 +112,9 @@ private:    // FFmpeg 相关
     HANDLE m_playThread;
     HANDLE m_renderEvent;
     bool m_shouldStop;
-    
-    // 音频播放器
+      // 音频播放器
     AudioPlayer m_audioPlayer;
+    double m_audioOffset;  // 音频偏移量（秒）
       // 新增成员变量
     ScalingMode m_scalingMode;
     FilterType m_currentFilter;

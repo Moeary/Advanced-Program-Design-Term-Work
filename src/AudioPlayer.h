@@ -1,5 +1,6 @@
 #pragma once
 
+#define NOMINMAX
 #include <windows.h>
 #include <atlcomcli.h>
 #include <mmdeviceapi.h>
@@ -25,9 +26,12 @@ public:
     
     bool Initialize(AVFormatContext* formatContext);
     HRESULT Start();
-    HRESULT Stop();
-    void Pause();
+    HRESULT Stop();    void Pause();
     void SetVolume(float volume); // 0.0 - 1.0
+    
+    // 音频偏移控制
+    void SetAudioOffset(double offset);
+    double GetAudioOffset() const;
     
     bool IsInitialized() const { return m_isInitialized; }
     
@@ -75,6 +79,7 @@ private:
     bool m_isInitialized;
     bool m_isPlaying;
     float m_volume;
+    double m_audioOffset;   // 音频偏移量（秒）
     
     // 新增：音视频同步相关变量
     double m_videoClock;        // 视频时钟（主时钟）

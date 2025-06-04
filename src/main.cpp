@@ -4,6 +4,7 @@
 #include <iostream>
 #include "VideoPlayer.h"
 #include "ProgressBar.h"
+#include "ControlPanel.h"
 
 // 窗口类名和标题
 const char* g_className = "FFmpegVideoPlayer";
@@ -12,6 +13,7 @@ const char* g_windowTitle = "FFmpeg Video Player";
 // 全局变量
 VideoPlayer* g_player = nullptr;
 ProgressBar* g_progressBar = nullptr;
+ControlPanel* g_controlPanel = nullptr;
 HWND g_hwnd = nullptr;
 UINT_PTR g_timerId = 0;
 
@@ -39,6 +41,25 @@ void OnProgressBarSeek(double position, void* userData)
     if (g_player)
     {
         g_player->Seek(position);
+    }
+}
+
+// 控制面板回调函数
+void OnControlPanelChanged(ControlType type, double value, void* userData)
+{
+    if (!g_player) return;
+    
+    switch (type)
+    {
+    case CONTROL_AUDIO_OFFSET:
+        g_player->SetAudioOffset(value);
+        break;
+    case CONTROL_VOLUME:
+        if (g_player->GetAudioPlayer())
+        {
+            g_player->GetAudioPlayer()->SetVolume((float)value);
+        }
+        break;
     }
 }
 
@@ -167,9 +188,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_progressBar->Initialize(g_hwnd, margin, clientRect.bottom - progressHeight - margin, 
                             clientRect.right - 2 * margin - timeDisplayWidth, progressHeight);
     g_progressBar->Show(true);
-    
-    // 设置定时器更新进度条
+      // 设置定时器更新进度条
     g_timerId = SetTimer(g_hwnd, 1, 100, nullptr); // 每100ms更新一次
+    
+    // 创建并初始化控制面板
+    g_controlPanel = new ControlPanel();
+    if (g_controlPanel->Initialize(g_hwnd, hInstance))
+    {
+        g_controlPanel->SetCallback(OnControlPanelChanged, nullptr);
+    }
     
     // 消息循环
     MSG msg;
@@ -182,8 +209,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     {
         KillTimer(g_hwnd, g_timerId);
     }
+    delete g_controlPanel;
     delete g_progressBar;
     delete g_player;
+    g_controlPanel = nullptr;
     g_progressBar = nullptr;
     g_player = nullptr;
     
@@ -429,13 +458,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             case '3':
                 PostMessage(hwnd, WM_COMMAND, ID_FILTER_MOSAIC, 0);
                 break;
-            
-            // 缩放模式快捷键 (F1-F2)
+              // 缩放模式快捷键 (F1-F2)
             case VK_F1:
                 PostMessage(hwnd, WM_COMMAND, ID_SCALE_FIT, 0);
                 break;
             case VK_F2:
                 PostMessage(hwnd, WM_COMMAND, ID_SCALE_ORIGINAL, 0);
+                break;
+            
+            // 控制面板快捷键 (F6)
+            case VK_F6:
+                if (g_controlPanel)
+                {
+                    if (g_controlPanel->IsVisible())
+                    {
+                        g_controlPanel->Hide();
+                    }
+                    else
+                    {
+                        g_controlPanel->Show(hwnd);
+                    }
+                }
                 break;
             }
         }
