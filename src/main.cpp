@@ -95,7 +95,7 @@ HMENU CreateMenuBar()
       // 缩放模式菜单
     HMENU hScaleMenu = CreatePopupMenu();
     AppendMenu(hScaleMenu, MF_STRING | MF_CHECKED, ID_SCALE_FIT, "&Fit to Window");
-    AppendMenu(hScaleMenu, MF_STRING, ID_SCALE_ORIGINAL, "&Original Size");
+    AppendMenu(hScaleMenu, MF_STRING, ID_SCALE_ORIGINAL, "&Full Size");
     AppendMenu(hMenuBar, MF_POPUP, (UINT_PTR)hScaleMenu, "&Scale");
     
     // 滤镜菜单
