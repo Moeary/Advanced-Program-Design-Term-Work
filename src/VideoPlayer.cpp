@@ -66,6 +66,10 @@ bool VideoPlayer::Initialize(HWND hwnd, const std::string& videoPath)
     m_windowWidth = rect.right - rect.left;
     m_windowHeight = rect.bottom - rect.top;
     
+    // 清理之前的渲染资源（关键修复）
+    CleanupD3D9();
+    CleanupGDI();
+    
     // 打开视频文件
     if (!OpenVideo(videoPath))
     {
@@ -281,6 +285,9 @@ bool VideoPlayer::SetupGDI()
 
 bool VideoPlayer::SetupD3D9()
 {
+    // 先清理现有D3D9资源（关键修复）
+    CleanupD3D9();
+    
     // 创建 Direct3D 9 对象
     m_d3d9 = Direct3DCreate9(D3D_SDK_VERSION);
     if (!m_d3d9)
